@@ -282,11 +282,16 @@ class RADNeRFTask(BaseTask):
             'sr_lip_lpips_loss': 0.5 * hparams['lambda_lpips_loss'] if self.global_step >= hparams['lpips_start_iters'] else 0,
             'dual_feature_matching_loss': hparams['lambda_dual_fm'] if self.global_step >= hparams['lpips_start_iters'] else 0
         }
-        total_loss = sum([loss_weights[k] * v for k, v in loss_output.items() if isinstance(v, torch.Tensor) and v.requires_grad])
+        total_loss = sum(
+            loss_weights[k] * v
+            for k, v in loss_output.items()
+            if isinstance(v, torch.Tensor) and v.requires_grad
+        )
         def mse2psnr(x): return -10. * torch.log(x) / torch.log(torch.Tensor([10.])).to(x.device)
+
         loss_output['head_psnr'] = mse2psnr(loss_output['mse_loss'].detach())
         outputs.update(loss_output)
-        
+
         # log and update lambda_ambient
         try:
             target_ambient_loss = hparams['target_ambient_loss'] # 1e-7
@@ -299,7 +304,7 @@ class RADNeRFTask(BaseTask):
             self.model.lambda_ambient.data = self.model.lambda_ambient.data + grad_lambda_ambient * lr_lambda_ambient
             self.model.lambda_ambient.data.clamp_(0, 1000)
             outputs['lambda_ambient'] = self.model.lambda_ambient.data
-        except:
+        except Exception:
             traceback.print_exc()
             print("| WARNING: ERROR calculating ambient loss")
         if (self.global_step+1) % hparams['tb_log_interval'] == 0:
