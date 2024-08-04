@@ -9,6 +9,8 @@ from mediapipe.tasks.python import vision
 from utils.commons.multiprocess_utils import multiprocess_run_tqdm, multiprocess_run
 from utils.commons.tensor_utils import convert_to_np
 from sklearn.neighbors import NearestNeighbors
+import cv2
+from PIL import Image, ImageDraw, ImageFilter
 
 def scatter_np(condition_img, classSeg=5):
 # def scatter(condition_img, classSeg=19, label_size=(512, 512)):
@@ -227,6 +229,9 @@ class MediapipeSegmenter:
             segmap = scatter_np(segmap[None, None, ...], classSeg=6)[0] # [6, H, W]
         return segmap
 
+    def _create_feathered_mask(self, mask, kernel_size=21):
+        return cv2.GaussianBlur(mask, (kernel_size, kernel_size), 0)
+    
     def _seg_out_img_with_segmap(self, img, segmap, mode='head'):
         """
         img: [h,w,c], img is in 0~255, np
@@ -249,11 +254,43 @@ class MediapipeSegmenter:
         elif mode == 'bg':
             selected_mask = segmap[[0], :, :].sum(axis=0)[None,:] > 0.5  # only seg out 0, which means background
             img[~selected_mask.repeat(3,axis=0).transpose(1,2,0)] = 0 # (-1,-1,-1) denotes black in our [-1,1] convention
+        elif mode == 'head_neck':
+            selected_mask = segmap[[1,2,3,5], :, :].sum(axis=0)[None,:] > 0.5 
+            img[~selected_mask.repeat(3,axis=0).transpose(1,2,0)] = 0
+        elif mode == 'without_head':
+            selected_mask = segmap[[0,2,4], :, :].sum(axis=0)[None,:] > 0.5 
+            img[~selected_mask.repeat(3,axis=0).transpose(1,2,0)] = 0 # (-1,-1,-1) denotes black in our [-1,1] 
         elif mode == 'full':
-            pass
+            selected_mask = segmap[[0,1,2,3,4,5], :, :].sum(axis=0)[None,:] > 0.5 
+            img[~selected_mask.repeat(3,axis=0).transpose(1,2,0)] = 0 # (-1,-1,-1) denotes black in our [-1,1] 
         else:
             raise NotImplementedError()
         return img, selected_mask
+
+    def _seg_out_img_with_segmap_alpha(self, img, segmap, mode='head_neck'):
+        """
+        img: [h,w,c], img is in 0~255, np
+        """
+        # 
+        img = copy.deepcopy(img)
+        if mode == 'head_neck':
+            selected_mask = segmap[[1,2,3,5], :, :].sum(axis=0)[None,:] > 0.5 
+            selected_mask_2d = selected_mask[0].astype(np.uint8)
+
+            kernel = np.ones((21,21), np.uint8)
+            eroded_img = cv2.erode(selected_mask_2d*255, kernel, iterations=1)
+            feathered_mask = cv2.GaussianBlur(eroded_img, (41, 41), 0)
+
+            result = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8) 
+            result[:, :, 0] = img[:, :, 0] 
+            result[:, :, 1] = img[:, :, 1] 
+            result[:, :, 2] = img[:, :, 2] 
+            img = result
+            selected_mask = (feathered_mask[None, :, :] > 0) 
+            feathered_mask = feathered_mask[:, :, np.newaxis]
+        else:
+            raise NotImplementedError()
+        return img, selected_mask, feathered_mask
     
     def _seg_out_img(self, img, segmenter=None, mode='head'):
         """
